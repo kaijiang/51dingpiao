@@ -314,11 +314,6 @@ class MyOrder(object):
     self.captcha = '' # 图片验证码
     self.orderId = '' # 订单流水号
     self.notify = {
-      'mail_enable':0,
-      'mail_username':'',
-      'mail_password':'',
-      'mail_server':'',
-      'mail_to':[],
       'dates':[],
       'trains':[],
       'xb':[],
@@ -339,11 +334,6 @@ class MyOrder(object):
     self.train_date = cp.get("train","date");
     self.from_city_name = cp.get("train","from")
     self.to_city_name = cp.get("train","to")
-    self.notify['mail_enable'] = int(cp.get("notify","mail_enable"))
-    self.notify['mail_username'] = cp.get("notify","mail_username")
-    self.notify['mail_password'] = cp.get("notify","mail_password")
-    self.notify['mail_server'] = cp.get("notify","mail_server")
-    self.notify['mail_to'] = cp.get("notify","mail_to").split(',')
     self.notify['dates'] = cp.get("notify","dates").split(',')
     self.notify['trains'] = cp.get("notify","trains").split(',')
     self.notify['xb'] = cp.get("notify","xb").split(',')
@@ -562,26 +552,6 @@ class MyOrder(object):
       self.trains = obj['data']
       return RET_OK
 
-  def sendMailNotification(self):
-    print(u'正在发送邮件提醒...')
-    me = u'订票提醒<%s>'%(self.notify['mail_username'])
-    msg = MIMEText(self.notify['mail_content'], _subtype='plain', _charset='gb2312')
-    msg['Subject'] = u'余票信息'
-    msg['From'] = me
-    msg['To'] = ';'.join(self.notify['mail_to'])
-    try:
-      server = smtplib.SMTP()
-      server.connect(self.notify['mail_server'])
-      server.login(self.notify['mail_username'], self.notify['mail_password'])
-      server.sendmail(me, self.notify['mail_to'], msg.as_string())
-      server.close()
-      print(u'发送邮件提醒成功')
-      return True
-    except Exception, e:
-      print(u'发送邮件提醒失败')
-      print str(e)
-      return False
-
   def printTrains(self):
     printDelimiter()
     print u"%s\t%s--->%s  '有':票源充足  '无':票已售完  '*':未到起售时间  '--':无此席别"%(self.train_date,self.from_city_name,self.to_city_name)
@@ -604,12 +574,16 @@ class MyOrder(object):
     printDelimiter()
     # TODO 余票数量和票价 https://kyfw.12306.cn/otn/leftTicket/queryTicketPrice?train_no=770000K77505&from_station_no=09&to_station_no=13&seat_types=1431&train_date=2014-01-01
     # yp_info=4022300000301440004610078033421007800536 代表
-    # 4022300000 软卧0
-    # 3014400046 硬卧46
-    # 1007803342 无座342
-    # 1007800536 硬座536
+    # 4022300000 软卧 价格223 数量0
+    # 3014400046 硬卧 价格144 数量46
+    # 1007803342 无座 价格80  数量342
+    # 1007800536 硬座 价格80  数量536
+    # O052050257 二等座 价格520.5 数量257
+    # M083250003 一等座 价格832.5 数量3
+    # P099050009 特等座 价格990.5 数量9
+    # 9164250000 商务座 价格142.5 数量0
     index = 1
-    self.notify['mail_content'] = ''
+    self.current_train_index = -1
     for train in self.trains:
       t = train['queryLeftNewDTO']
       status = '售完' if t['canWebBuy']=='N' else '预定'
@@ -631,6 +605,14 @@ class MyOrder(object):
           'price':0,
           'left':0
           },
+        'zy':{ # 一等座
+          'price':0,
+          'left':0
+        },
+        'ze':{ # 二等座
+          'price':0,
+          'left':0
+        },
       }
       # 分析票价和余票数量
       while i < (len(t['yp_info']) / 10):
@@ -650,114 +632,70 @@ class MyOrder(object):
         elif tmp[0] == '4':
           ypInfo['rw']['price'] = price
           ypInfo['rw']['left'] = left
+        elif tmp[0] == 'O':
+          ypInfo['ze']['price'] = price
+          ypInfo['ze']['left'] = left
+        elif tmp[0] == 'M':
+          ypInfo['zy']['price'] = price
+          ypInfo['zy']['left'] = left
         i = i + 1
       yz_price = u'硬座%s'%(ypInfo['yz']['price']) if ypInfo['yz']['price'] else ''
       yw_price = u'硬卧%s'%(ypInfo['yw']['price']) if ypInfo['yw']['price'] else ''
-      print u"(%d)   %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s%s"%(index,
-        t['station_train_code'],
-        t['from_station_name'],
-        t['to_station_name'],
-        t["zy_num"],
-        t["ze_num"],
-        ypInfo['rw']['left'] if ypInfo['rw']['left'] else t["rw_num"],
-        ypInfo['yw']['left'] if ypInfo['yw']['left'] else t["yw_num"],
-        t["rz_num"],
-        ypInfo['yz']['left'] if ypInfo['yz']['left'] else t["yz_num"],
-        ypInfo['wz']['left'] if ypInfo['wz']['left'] else t["wz_num"],
-        yz_price,
-        yw_price)
-      index += 1
-      if self.notify['mail_enable'] == 1 and t['canWebBuy'] == 'Y':
-        msg = ''
-        prefix = u'[%s]车次%s[%s/%s->%s/%s, 历时%s]现在有票啦\n'%(t['start_train_date'], t['station_train_code'], t['from_station_name'], t['start_time'], t['to_station_name'], t['arrive_time'], t['lishi'])
-        if self.notify['focus'].has_key('all'): # 任意车次
-          if self.notify['focus']['all'][0] == 'all': # 任意席位
-            msg = prefix
-          else: # 指定席位
+      ze_price = u'二等座%s'%(ypInfo['ze']['price']) if ypInfo['ze']['price'] else ''
+      if self.notify['focus'].has_key('all'):
+        print u"(%d)   %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s%s%s"%(index,
+          t['station_train_code'],
+          t['from_station_name'],
+          t['to_station_name'],
+          ypInfo['zy']['left'] if ypInfo['zy']['left'] else t["zy_num"],
+          ypInfo['ze']['left'] if ypInfo['ze']['left'] else t["ze_num"],
+          ypInfo['rw']['left'] if ypInfo['rw']['left'] else t["rw_num"],
+          ypInfo['yw']['left'] if ypInfo['yw']['left'] else t["yw_num"],
+          t["rz_num"],
+          ypInfo['yz']['left'] if ypInfo['yz']['left'] else t["yz_num"],
+          ypInfo['wz']['left'] if ypInfo['wz']['left'] else t["wz_num"],
+          yz_price,
+          yw_price,
+          ze_price)
+        # 指定的车次，席别有票
+        if t['canWebBuy'] == 'Y':
+          if self.notify['focus']['all'][0] == 'all':
+            self.current_train_index = index - 1              
+          else:
             for seat in self.notify['focus']['all']:
               if ypInfo.has_key(seat) and ypInfo[seat]['left']:
-                msg += u'座位类型:%s, 剩余车票数量:%s, 票价:%s \n'%(seat if not seatTypeCode.has_key(seat) else seatTypeCode[seat], ypInfo[seat]['left'], ypInfo[seat]['price'])
-            if msg:
-              msg = prefix + msg + u'\n'
-        elif self.notify['focus'].has_key(t['station_train_code']): # 指定车次
+                self.current_train_index = index - 1              
+      
+      elif self.notify['focus'].has_key(t['station_train_code']):
+        print u"(%d)   %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s%s%s"%(index,
+          t['station_train_code'],
+          t['from_station_name'],
+          t['to_station_name'],
+          ypInfo['zy']['left'] if ypInfo['zy']['left'] else t["zy_num"],
+          ypInfo['ze']['left'] if ypInfo['ze']['left'] else t["ze_num"],
+          ypInfo['rw']['left'] if ypInfo['rw']['left'] else t["rw_num"],
+          ypInfo['yw']['left'] if ypInfo['yw']['left'] else t["yw_num"],
+          t["rz_num"],
+          ypInfo['yz']['left'] if ypInfo['yz']['left'] else t["yz_num"],
+          ypInfo['wz']['left'] if ypInfo['wz']['left'] else t["wz_num"],
+          yz_price,
+          yw_price,
+          ze_price)
+        # 指定的车次，席别有票
+        if t['canWebBuy'] == 'Y':
           if self.notify['focus'][t['station_train_code']][0] == 'all': # 任意席位
-            msg = prefix
-          else: # 指定席位
+            self.current_train_index = index - 1              
+          else:
             for seat in self.notify['focus'][t['station_train_code']]:
               if ypInfo.has_key(seat) and ypInfo[seat]['left']:
-                msg += u'座位类型:%s, 剩余车票数量:%s, 票价:%s \n'%(seat if not seatTypeCode.has_key(seat) else seatTypeCode[seat], ypInfo[seat]['left'], ypInfo[seat]['price'])
-            if msg:
-              msg = prefix + msg + u'\n'
-        self.notify['mail_content'] += msg
+                self.current_train_index = index - 1              
+
+      index += 1
     printDelimiter()
-    if self.notify['mail_enable'] == 1:
-      if self.notify['mail_content']:
-        self.sendMailNotification()
-        return RET_OK
-      else:
-        length = len(self.notify['dates'])
-        if length > 1:
-          self.train_date = self.notify['dates'][random.randint(0, length - 1)]
-        return RET_ERR
-    else:
+    if self.current_train_index != -1:
       return RET_OK
-
-  # -1->重新查询/0->退出程序/1~len->车次序号
-  def selectAction(self):
-    ret = -1
-    self.current_train_index = 0
-    trains_num = len(self.trains)
-    print u"您可以选择:\n1~%d.选择车次开始订票\nd.更改乘车日期\nf.更改出发站\nt.更改目的站\ns.同时更改出发站和目的站\na.同时更改乘车日期,出发站和目的站\nu.查询未完成订单\nr.刷票模式\nn.普通模式\nq.退出\n刷新车票请直接回车"%(trains_num)
-    printDelimiter()
-    select = raw_input("")
-    if select.isdigit():
-      index = int(select)
-      if index<1 or index>trains_num:
-        print u"输入的序号无效,请重新选择车次(1~%d)"%(trains_num)
-        index = selectTrain(self.trains)
-      if self.trains[index-1]['queryLeftNewDTO']['canWebBuy'] != 'Y':
-        print u"您选择的车次%s没票啦,请重新选择车次"%(self.trains[index-1]['queryLeftNewDTO']['station_train_code'])
-        index = selectTrain(self.trains)
-      ret = index
-      self.current_train_index = index - 1
-    elif select == "d" or select == "D":
-      self.train_date = inputDate()
-    elif select == "f" or select == "F":
-      station = inputStation(u"请输入出发站:")
-      self.from_city_name = station['name']
-      self.from_station_telecode = station['telecode']
-    elif select == "t" or select == "T":
-      station = inputStation(u"请输入目的站:")
-      self.to_city_name = station['name']
-      self.to_station_telecode = station['telecode']
-    elif select == "s" or select == "S":
-      station = inputStation(u"请输入出发站:")
-      self.from_city_name = station['name']
-      self.from_station_telecode = station['telecode']
-      station = inputStation(u"请输入目的站:")
-      self.to_city_name = station['name']
-      self.to_station_telecode = station['telecode']
-    elif select == "a" or select == "A":
-      self.train_date = inputDate()
-      station = inputStation(u"请输入出发站:")
-      self.from_city_name = station['name']
-      self.from_station_telecode = station['telecode']
-      station = inputStation(u"请输入目的站:")
-      self.to_city_name = station['name']
-      self.to_station_telecode = station['telecode']
-    elif select == "u" or select == "U":
-      ret = self.queryMyOrderNotComplete()
-      ret = self.selectAction()
-    elif select == "r" or select == "R":
-      self.notify['mail_enable'] = 1;
-      ret = -1
-    elif select == "n" or select == "N":
-      self.notify['mail_enable'] = 0;
-      ret = -1
-    elif select == "q" or select == "Q":
-      ret = 0
-
-    return ret
+    else:
+      return RET_ERR
 
   def initOrder(self):
     # 可以省略的步骤
@@ -1155,7 +1093,6 @@ def main():
   parser.add_argument('-u', '--username', help='Specify username to login')
   parser.add_argument('-p', '--password', help='Specify password to login')
   parser.add_argument('-d', '--date', help='Specify train date, 2014-01-01')
-  parser.add_argument('-m', '--mail', help='Send email notification when available')
   args = parser.parse_args()
 
   stationInit()
@@ -1174,8 +1111,6 @@ def main():
       order.train_date = args.date  # 使用指定的乘车日期代替配置文件中的乘车日期
     else:
       order.train_date = inputDate(u"乘车日期错误,请重新输入:")
-  if args.mail:
-    order.notify['mail_enable'] = 1 if args.mail == '1' else 0  # 有票时自动发送邮件通知
 
   order.printConfig()
   order.initCookieJar()
@@ -1183,18 +1118,13 @@ def main():
   print(getTime())
 
   while 1:
+    time.sleep(1)
     # 查询车票
     if order.queryTickets() != RET_OK:
       continue
     # 显示查询结果
     if order.printTrains() != RET_OK:
       continue
-    # 选择菜单列举的动作之一
-    action = order.selectAction()
-    if action == -1:
-      continue
-    elif action == 0:
-      sys.exit()
     # 订单初始化
     if order.initOrder() != RET_OK:
       continue
