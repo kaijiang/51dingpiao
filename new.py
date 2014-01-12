@@ -8,13 +8,16 @@ import urllib2
 import json
 import time
 import sys
+import os
 import re
 import ConfigParser
 import codecs
 import random
 #import logging
 import smtplib
+import shutil
 from email.mime.text import MIMEText
+from sets import Set
 
 # Global variables
 stations = []
@@ -553,6 +556,9 @@ class MyOrder(object):
       return RET_OK
 
   def printTrains(self):
+    print chr(27) + "[2J"
+    print chr(27) + "[1;1H"
+    print getTime()
     printDelimiter()
     print u"%s\t%s--->%s  '有':票源充足  '无':票已售完  '*':未到起售时间  '--':无此席别"%(self.train_date,self.from_city_name,self.to_city_name)
     print u"余票查询结果如下:"
@@ -633,8 +639,12 @@ class MyOrder(object):
           ypInfo['rw']['price'] = price
           ypInfo['rw']['left'] = left
         elif tmp[0] == 'O':
-          ypInfo['ze']['price'] = price
-          ypInfo['ze']['left'] = left
+          if tmp[6] == '3':
+            ypInfo['wz']['price'] = price
+            ypInfo['wz']['left'] = left
+          else:
+            ypInfo['ze']['price'] = price
+            ypInfo['ze']['left'] = left            
         elif tmp[0] == 'M':
           ypInfo['zy']['price'] = price
           ypInfo['zy']['left'] = left
@@ -1077,6 +1087,60 @@ class MyOrder(object):
 
     return RET_ERR
 
+class MyHost(object):
+  def __init__(self):
+    self.ip_pool = Set()
+  
+  def parseHtml(self, data):
+    ip = re.findall( r'[0-9]+(?:\.[0-9]+){3}', data)
+    return ip
+
+  def getHost(self, dnsip):
+    url = "http://webscan.360.cn/tools/dnsInfo.php"
+    referer = "http://webscan.360.cn/"
+    parameters = [
+        ('dns_ip', dnsip),
+        ('domain_name', "kyfw.12306.cn"),
+        ('dns_type', "A")
+    ]
+    postData = ''
+    length = len(parameters);
+    for i in range(0, length):
+      postData += parameters[i][0] + '=' + parameters[i][1]
+      if i < (length - 1):
+        postData += '&'
+    resp = sendPostRequest(url, postData, referer)
+    try:
+      data = resp.read()
+      ip = self.parseHtml(data)
+      return ip
+    except:
+      print "post error"
+
+  def selectHost(self):
+    dnss = ["bjdx","jsdx", "tjdx", "bjlt", "sclt"]
+    for dns in dnss:
+      ret_ip = self.getHost(dns)
+      for ip in ret_ip:
+        self.ip_pool.add(ip)
+
+  def replaceHosts(self, ip):
+    input_file = "/etc/hosts"
+    output_file = "/etc/hosts.new"
+    input_fd = open(input_file, 'r')
+    output_fd = open(output_file, 'w')
+    lines = input_fd.readlines()
+    for line in lines:
+        if line.find('kyfw.12306.cn') != -1:
+            newline = "%s kyfw.12306.cn\n" % ip
+            output_fd.write(newline)
+        else:
+            output_fd.write(line)
+
+    input_fd.close()
+    output_fd.close()
+    shutil.move(output_file, input_file)
+
 def main():
   print(getTime())
   '''
@@ -1097,6 +1161,8 @@ def main():
 
   stationInit()
 
+  host = MyHost()
+  host.selectHost()
   order = MyOrder()
   if args.config:
     order.readConfig(args.config) # 使用指定的配置文件
@@ -1119,39 +1185,43 @@ def main():
 
   while 1:
     time.sleep(1)
-    # 查询车票
-    if order.queryTickets() != RET_OK:
-      continue
-    # 显示查询结果
-    if order.printTrains() != RET_OK:
-      continue
-    # 订单初始化
-    if order.initOrder() != RET_OK:
-      continue
-    # 检查订单信息
-    if order.checkOrderInfo() != RET_OK:
-      continue
-    # 查询排队和余票情况
-    if order.getQueueCount() != RET_OK:
-      continue
-    # 提交订单到队里中
-    tries = 0
-    while tries < 2:
-      tries += 1
-      if order.confirmSingleForQueue() == RET_OK:
+    for ip in host.ip_pool:
+      # 修改/etc/host
+      host.replaceHosts(ip)
+    
+      # 查询车票
+      if order.queryTickets() != RET_OK:
+        continue
+      # 显示查询结果
+      if order.printTrains() != RET_OK:
+        continue
+      # 订单初始化
+      if order.initOrder() != RET_OK:
+        continue
+      # 检查订单信息
+      if order.checkOrderInfo() != RET_OK:
+        continue
+      # 查询排队和余票情况
+      if order.getQueueCount() != RET_OK:
+        continue
+      # 提交订单到队里中
+      tries = 0
+      while tries < 2:
+        tries += 1
+        if order.confirmSingleForQueue() == RET_OK:
+          break
+      # 获取orderId
+      tries = 0
+      while tries < 2:
+        tries += 1
+        if order.queryOrderWaitTime() == RET_OK:
+          break
+      # 正式提交订单
+      if order.payOrder() == RET_OK:
         break
-    # 获取orderId
-    tries = 0
-    while tries < 2:
-      tries += 1
-      if order.queryOrderWaitTime() == RET_OK:
+      # 访问未完成订单页面检查是否订票成功
+      if order.queryMyOrderNotComplete() == RET_OK:
         break
-    # 正式提交订单
-    if order.payOrder() == RET_OK:
-      break
-    # 访问未完成订单页面检查是否订票成功
-    if order.queryMyOrderNotComplete() == RET_OK:
-      break
 
   raw_input('Press any key to continue')
   #logging.debug('End')
