@@ -1097,7 +1097,7 @@ class MyHost(object):
 
   def getHost(self, dnsip):
     url = "http://webscan.360.cn/tools/dnsInfo.php"
-    referer = "http://webscan.360.cn/"
+    referer = "http://webscan.360.cn/dnslookup"
     parameters = [
         ('dns_ip', dnsip),
         ('domain_name', "kyfw.12306.cn"),
@@ -1118,7 +1118,8 @@ class MyHost(object):
       print "post error"
 
   def selectHost(self):
-    dnss = ["bjdx","jsdx", "tjdx", "bjlt", "sclt"]
+    dnss = ["bjdx","jsdx", "tjdx", "bjlt", "sclt", "gg", "shlt"]
+
     for dns in dnss:
       ret_ip = self.getHost(dns)
       for ip in ret_ip:
@@ -1163,6 +1164,7 @@ def main():
 
   host = MyHost()
   host.selectHost()
+  print host.ip_pool
   order = MyOrder()
   if args.config:
     order.readConfig(args.config) # 使用指定的配置文件
@@ -1184,7 +1186,7 @@ def main():
   print(getTime())
 
   while 1:
-    time.sleep(1)
+    #time.sleep(1)
     for ip in host.ip_pool:
       # 修改/etc/host
       host.replaceHosts(ip)
