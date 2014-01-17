@@ -5,4 +5,4 @@
 Usage
 ------------
 cp config-sample.ini config.ini
-python 51dingpiao.py
+python new.py

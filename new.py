@@ -1126,6 +1126,7 @@ class MyHost(object):
         self.ip_pool.add(ip)
 
   def replaceHosts(self, ip):
+    flag = False
     input_file = "/etc/hosts"
     output_file = "/etc/hosts.new"
     input_fd = open(input_file, 'r')
@@ -1135,9 +1136,15 @@ class MyHost(object):
         if line.find('kyfw.12306.cn') != -1:
             newline = "%s kyfw.12306.cn\n" % ip
             output_fd.write(newline)
+            flag = True
         else:
             output_fd.write(line)
 
+    if flag == False:
+      newline = "%s kyfw.12306.cn\n" % ip
+      print newline
+      output_fd.write(newline)
+      
     input_fd.close()
     output_fd.close()
     shutil.move(output_file, input_file)
